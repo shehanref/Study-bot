@@ -59,7 +59,8 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"{i}. {row[0]} — {row[1]} pt\n"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-if name == 'main':
+if __name__ == '__main__':
+
     init_db()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
