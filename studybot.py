@@ -1,18 +1,31 @@
 import os
 import sqlite3
 import logging
+import threading
 from datetime import datetime, time
 import pytz
+from flask import Flask
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# Logging setup
+# --- FLASK WEB SERVER (For Render Free Tier) ---
+server = Flask('')
+
+@server.route('/')
+def home():
+    return "Study Bot is Online!"
+
+def run_flask():
+    # Render সাধারণত ৮০০০ বা ১০০০০ পোর্টে চলে, তাই ০.০.০.০ ইন্টারফেস ব্যবহার করা হয়েছে
+    port = int(os.environ.get('PORT', 8080))
+    server.run(host='0.0.0.0', port=port)
+
+# --- BOT LOGIC ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 TOKEN = os.getenv('BOT_TOKEN')
 TZ = pytz.timezone('Asia/Dhaka')
 
-# --- DATABASE SETUP ---
 def init_db():
     conn = sqlite3.connect('study_bot.db')
     c = conn.cursor()
@@ -32,30 +45,28 @@ def init_db():
 def get_db():
     return sqlite3.connect('study_bot.db')
 
-# --- COMMANDS ---
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 **Advanced Study Tracker Bot**\n\n"
-        "• `/settask t1, t2...` : নতুন টাস্ক সেট করুন (কমা দিয়ে)\n"
-        "• `/task` : টাস্ক লিস্ট ও কমপ্লিট করার বাটন\n"
-        "• `/changetask` : টাস্ক বদলাতে ভোট দিন (২ জন)\n"
-        "• `/leaderboard` : গ্রুপের র‍্যাঙ্কিং দেখুন\n"
-        "• `/amolnama` : আজকের কাজের রিপোর্ট",
+        "🚀 **Advanced Study Tracker Bot (Free Tier)**\n\n"
+        "• `/settask t1, t2...` : টাস্ক সেট করুন\n"
+        "• `/task` : টাস্ক লিস্ট ও বাটন\n"
+        "• `/changetask` : রিসেট ভোট (২ জন)\n"
+        "• `/leaderboard` : র‍্যাঙ্কিং\n"
+        "• `/amolnama` : আজকের রিপোর্ট",
         parse_mode='Markdown'
     )
 
 async def set_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     if not context.args:
-        await update.message.reply_text("ব্যবহার: `/settask পড়া১, পড়া২, পড়া৩`")
+        await update.message.reply_text("ব্যবহার: `/settask পড়া১, পড়া২`")
         return
 
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT set_at FROM tasks WHERE chat_id = ?", (chat_id,))
     if c.fetchone():
-        await update.message.reply_text("❌ আজকের টাস্ক অলরেডি সেট করা। বদলাতে চাইলে `/changetask` কমান্ড দিন।")
+        await update.message.reply_text("❌ টাস্ক অলরেডি সেট। বদলাতে `/changetask` দিন।")
         conn.close()
         return
 
@@ -64,7 +75,7 @@ async def set_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
               (chat_id, task_text, datetime.now(TZ).isoformat()))
     conn.commit()
     conn.close()
-    await update.message.reply_text(f"✅ টাস্ক সেট করা হয়েছে!\n\n📋 **তালিকা:** {task_text}")
+    await update.message.reply_text(f"✅ টাস্ক সেট হয়েছে!\n📋 {task_text}")
 
 async def show_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
@@ -75,7 +86,7 @@ async def show_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = c.fetchone()
     
     if not row:
-        await update.message.reply_text("আজকের কোনো টাস্ক সেট করা হয়নি!")
+        await update.message.reply_text("আজকের কোনো টাস্ক নেই!")
         return
 
     tasks = [t.strip() for t in row[0].split(',')]
@@ -85,26 +96,7 @@ async def show_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = "✅" if c.fetchone() else "⬜"
         keyboard.append([InlineKeyboardButton(f"{status} {t}", callback_data=f"done_{i}")])
     
-    await update.message.reply_text("📖 আপনার করা টাস্কগুলোতে ক্লিক করুন:\n(প্রতিটি ২ পয়েন্ট, না করলে -১)", reply_markup=InlineKeyboardMarkup(keyboard))
-    conn.close()
-
-async def change_task_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    user_id = str(update.effective_user.id)
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO votes (chat_id, user_id) VALUES (?, ?)", (chat_id, user_id))
-    c.execute("SELECT COUNT(*) FROM votes WHERE chat_id = ?", (chat_id,))
-    count = c.fetchone()[0]
-    
-    if count >= 2:
-        c.execute("DELETE FROM tasks WHERE chat_id = ?", (chat_id,))
-        c.execute("DELETE FROM votes WHERE chat_id = ?", (chat_id,))
-        c.execute("DELETE FROM user_progress WHERE chat_id = ?", (chat_id,))
-        await update.message.reply_text("🗳 ভোট সম্পন্ন! আজকের টাস্ক রিসেট হয়েছে। এখন নতুন টাস্ক দিন।")
-    else:
-        await update.message.reply_text(f"🗳 ভোট রেকর্ড হয়েছে ({count}/2)। টাস্ক বদলাতে আরও ১ জনের ভোট লাগবে।")
-    conn.commit()
+    await update.message.reply_text("📖 আপনার করা টাস্কগুলো সিলেক্ট করুন:", reply_markup=InlineKeyboardMarkup(keyboard))
     conn.close()
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -122,7 +114,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             c.execute("INSERT OR IGNORE INTO scores (chat_id, user_id, name, points) VALUES (?, ?, ?, 0)", (chat_id, user.id, user.first_name))
             c.execute("UPDATE scores SET points = points + 2 WHERE chat_id=? AND user_id=?", (chat_id, user.id))
             await query.answer(f"সাবাস {user.first_name}! +২ পয়েন্ট।")
-            # বাটন আপডেট করার জন্য আবার শো টাস্ক কল করা যেতে পারে
         except sqlite3.IntegrityError:
             await query.answer("আপনি এটি আগেই শেষ করেছেন!", show_alert=True)
     conn.commit()
@@ -148,7 +139,7 @@ async def amolnama(update: Update, context: ContextTypes.DEFAULT_TYPE):
         done_indices = [r[0] for r in c.fetchall()]
         done_tasks = [tasks[i] for i in done_indices]
         pending = len(tasks) - len(done_tasks)
-        report += f"👤 {name}: ✅ {len(done_tasks)} টি শেষ, ⏳ {pending} টি বাকি।\n"
+        report += f"👤 {name}: ✅ {len(done_tasks)} শেষ, ⏳ {pending} বাকি\n"
     
     await update.message.reply_text(report, parse_mode='Markdown')
     conn.close()
@@ -160,27 +151,46 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("SELECT name, points FROM scores WHERE chat_id = ? ORDER BY points DESC", (chat_id,))
     rows = c.fetchall()
     msg = "🏆 **Leaderboard**\n\n"
-    if not rows: msg += "এখনো কেউ পয়েন্ট পায়নি।"
     for i, r in enumerate(rows, 1): msg += f"{i}. {r[0]} — {r[1]} pt\n"
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    await update.message.reply_text(msg or "পয়েন্ট টেবিল খালি।", parse_mode='Markdown')
     conn.close()
 
-# --- অটো রিফ্রেশ লজিক (সকাল ৬টা) ---
+async def change_task_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    user_id = str(update.effective_user.id)
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO votes (chat_id, user_id) VALUES (?, ?)", (chat_id, user_id))
+    c.execute("SELECT COUNT(*) FROM votes WHERE chat_id = ?", (chat_id,))
+    count = c.fetchone()[0]
+    
+    if count >= 2:
+        c.execute("DELETE FROM tasks WHERE chat_id = ?", (chat_id,))
+        c.execute("DELETE FROM votes WHERE chat_id = ?", (chat_id,))
+        c.execute("DELETE FROM user_progress WHERE chat_id = ?", (chat_id,))
+        await update.message.reply_text("🗳 ভোট সম্পন্ন! টাস্ক রিসেট হয়েছে। নতুন টাস্ক দিন।")
+    else:
+        await update.message.reply_text(f"🗳 ভোট রেকর্ড হয়েছে ({count}/2)।")
+    conn.commit()
+    conn.close()
+
 async def daily_refresh(context: ContextTypes.DEFAULT_TYPE):
     conn = get_db()
     c = conn.cursor()
-    # যারা টাস্ক করেনি তাদের -১ পেনাল্টি
     c.execute("UPDATE scores SET points = points - 1")
     c.execute("DELETE FROM tasks")
     c.execute("DELETE FROM user_progress")
     c.execute("DELETE FROM votes")
     conn.commit()
     conn.close()
-    print("All tasks refreshed at 6 AM.")
+    print("Daily Refresh Success")
 
 if __name__ == '__main__':
     init_db()
-    # জব কিউ সহ অ্যাপ তৈরি
+    
+    # আলাদা থ্রেডে ফ্ল্যাক্স সার্ভার চালু করা যাতে রেন্ডার পোর্ট পায়
+    threading.Thread(target=run_flask, daemon=True).start()
+    
     app = Application.builder().token(TOKEN).build()
     
     if app.job_queue:
@@ -194,4 +204,5 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("amolnama", amolnama))
     app.add_handler(CallbackQueryHandler(button_handler))
 
+    print("Bot is starting...")
     app.run_polling()
