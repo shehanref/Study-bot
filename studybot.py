@@ -4,7 +4,7 @@ import sqlite3
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-TOKEN = 'YOUR_BOT_TOKEN_HERE'
+TOKEN = os.getenv('BOT_TOKEN')
 
 # ডাটাবেজ সেটআপ
 def init_db():
